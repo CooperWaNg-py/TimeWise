@@ -3,14 +3,16 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/png" href="favicon.png" />
 <title>TimeWise</title>
 <style>
   :root { --bg:#f6f7fb; --card:#fff; --ink:#1c2333; --muted:#67718a; --accent:#4f7cff; --good:#2ea86b; --warn:#e0a02e; --bad:#d9534f; }
   * { box-sizing: border-box; }
   body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
-  header { background:var(--card); padding:14px 24px; display:flex; align-items:baseline; gap:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  header { background:var(--card); padding:14px 24px; display:flex; align-items:center; gap:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
   header h1 { font-size:20px; margin:0; }
   header .tag { color:var(--muted); font-size:13px; }
+  .logo { width:28px; height:28px; image-rendering:pixelated; }
   nav { margin-left:auto; display:flex; gap:8px; }
   nav button, .btn { border:1px solid #d7dcea; background:#fff; border-radius:8px; padding:7px 14px; cursor:pointer; font-size:14px; }
   nav button.active, .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -41,6 +43,7 @@
 </head>
 <body>
 <header>
+  <img src="logo.png" alt="TimeWise logo" class="logo" />
   <h1>TimeWise</h1><span class="tag">Understand your screen time.</span>
   <nav id="nav" class="hidden">
     <button data-view="overview" class="active">Overview</button>
@@ -51,7 +54,8 @@
 <main>
   <!-- First run: role selection (US-01) -->
   <section id="view-role" class="hidden">
-    <h2 style="text-align:center;margin:30px 0">Who uses this account?</h2>
+    <div style="text-align:center; margin-top:40px"><img src="logo.png" alt="TimeWise" style="width:96px; height:96px; image-rendering:pixelated" /></div>
+    <h2 style="text-align:center;margin:20px 0">Who uses this account?</h2>
     <div class="grid">
       <div class="card choice" data-role="master">
         <div class="emoji">👨‍👩‍👧</div><h2>Parent (Master)</h2>
