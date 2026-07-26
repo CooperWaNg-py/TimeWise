@@ -36,6 +36,19 @@ pub struct Config {
     pub break_prompt_after_min: u64,
     /// Master only: LAN port for the embedded API.
     pub port: u16,
+    /// Pause tracking after this many seconds without keyboard/mouse input.
+    #[serde(default = "default_idle_threshold_s")]
+    pub idle_threshold_s: u64,
+    /// Master only: also track this account's own usage (iteration 2).
+    #[serde(default)]
+    pub track_self: bool,
+    /// Master only: token for the self-tracking worker (generated on enable).
+    #[serde(default)]
+    pub self_token: Option<String>,
+}
+
+fn default_idle_threshold_s() -> u64 {
+    300
 }
 
 impl Config {
@@ -48,6 +61,9 @@ impl Config {
             heartbeat_interval_s: DEFAULT_HEARTBEAT_INTERVAL_S,
             break_prompt_after_min: DEFAULT_BREAK_PROMPT_AFTER_MIN,
             port: DEFAULT_PORT,
+            idle_threshold_s: default_idle_threshold_s(),
+            track_self: false,
+            self_token: None,
         }
     }
 

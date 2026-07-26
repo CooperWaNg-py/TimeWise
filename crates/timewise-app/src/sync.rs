@@ -314,6 +314,7 @@ mod tests {
                 thresholds: Thresholds::default(),
                 usage: UsageTotals::default(),
                 break_prompt_after_min: 40,
+                points_balance: 0,
             })
         }
         async fn post_batch(&self, _w: &str, _t: &str, batch: &BatchUpload) -> Result<BatchAccepted, SyncError> {

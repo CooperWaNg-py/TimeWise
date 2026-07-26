@@ -5,6 +5,7 @@
 //! HTTP calls carry a 10 s client timeout, acceptable for v1.
 
 use crate::config::{Config, MasterRegistration};
+use crate::idle::{gated_window, IdleSource, SystemIdle};
 use crate::notify::{BreakPrompt, Notifier, WarningLadder};
 use crate::sync::{run_cycle_with_backoff, ApiClient, MasterSync, ReqwestClient};
 use crate::tracker::{Tracker, WindowSource};
@@ -14,11 +15,12 @@ use std::time::Duration;
 use timewise_core::store::worker as store;
 use timewise_core::{timeutil, Categorizer};
 
-pub struct WorkerRuntime<S: WindowSource, N: Notifier> {
+pub struct WorkerRuntime<S: WindowSource, N: Notifier, I: IdleSource = SystemIdle> {
     pub config: Config,
     pub conn: std::sync::Arc<parking_lot::Mutex<Connection>>,
     pub source: S,
     pub notifier: N,
+    pub idle: I,
     pub clients: Vec<(MasterRegistration, Arc<dyn ApiClient>)>,
 }
 
@@ -30,14 +32,20 @@ fn local_tz_offset_s() -> i32 {
     chrono::Local::now().offset().local_minus_utc()
 }
 
-impl<S: WindowSource, N: Notifier> WorkerRuntime<S, N> {
+impl<S: WindowSource, N: Notifier> WorkerRuntime<S, N, SystemIdle> {
     pub fn new(config: Config, conn: Connection, source: S, notifier: N) -> Self {
+        Self::with_idle(config, conn, source, notifier, SystemIdle)
+    }
+}
+
+impl<S: WindowSource, N: Notifier, I: IdleSource> WorkerRuntime<S, N, I> {
+    pub fn with_idle(config: Config, conn: Connection, source: S, notifier: N, idle: I) -> Self {
         let clients = config
             .masters
             .iter()
             .map(|m| (m.clone(), Arc::new(ReqwestClient::new(&m.base_url)) as Arc<dyn ApiClient>))
             .collect();
-        WorkerRuntime { config, conn: std::sync::Arc::new(parking_lot::Mutex::new(conn)), source, notifier, clients }
+        WorkerRuntime { config, conn: std::sync::Arc::new(parking_lot::Mutex::new(conn)), source, notifier, idle, clients }
     }
 
     /// Run until `shutdown` resolves. Loops: tracker every 2 s; sync per
@@ -58,7 +66,9 @@ impl<S: WindowSource, N: Notifier> WorkerRuntime<S, N> {
             tokio::select! {
                 _ = tick.tick() => {
                     let now = now_ts();
-                    let window = self.source.active_window();
+                    let raw = self.source.active_window();
+                    let idle_s = self.idle.idle_seconds();
+                    let window = gated_window(raw, idle_s, self.config.idle_threshold_s as i64);
                     let in_session = window.is_some();
                     let poll_result = {
                         let db = self.conn.lock();

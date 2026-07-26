@@ -52,7 +52,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/dashboard/summary", axum::routing::get(dashboard_summary))
         .route("/api/v1/dashboard/child/{id}", axum::routing::get(dashboard_child))
         .route("/api/v1/dashboard/uncategorized/{id}", axum::routing::get(dashboard_uncategorized))
-        .route("/api/v1/children/{id}/approve", axum::routing::post(approve_child))
+        .route("/api/v1/workers", axum::routing::get(list_all_workers))
+        .route("/api/v1/workers/{id}/approve", axum::routing::post(approve_worker))
+        .route("/api/v1/workers/{id}/assign", axum::routing::post(assign_worker))
+        .route("/api/v1/children", axum::routing::get(list_all_children))
         .route("/api/v1/children/{id}/goal", axum::routing::post(set_child_goal))
         .route("/api/v1/categories/override", axum::routing::post(set_category_override))
         .layer(CorsLayer::permissive())
@@ -85,10 +88,18 @@ fn require_approved(w: &WorkerInfo) -> Result<(), StatusCode> {
     if w.approved { Ok(()) } else { Err(StatusCode::FORBIDDEN) }
 }
 
-fn status_of(w: &WorkerInfo) -> RegisterResponse {
+fn status_of(state: &AppState, w: &WorkerInfo) -> RegisterResponse {
+    let child_name = w.child_id.as_ref().and_then(|cid| {
+        let db = state.db.lock();
+        store::list_children(&db)
+            .ok()?
+            .into_iter()
+            .find(|c| &c.id == cid)
+            .map(|c| c.name)
+    });
     RegisterResponse {
         status: if w.approved { RegistrationStatus::Approved } else { RegistrationStatus::Pending },
-        child_name: w.child_name.clone(),
+        child_name,
     }
 }
 
@@ -99,12 +110,14 @@ async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
-    let db = state.db.lock();
-    store::upsert_worker(&db, &req, now_ts()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let w = store::get_worker(&db, &req.worker_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(status_of(&w)))
+    let w = {
+        let db = state.db.lock();
+        store::upsert_worker(&db, &req, now_ts()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store::get_worker(&db, &req.worker_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    Ok(Json(status_of(&state, &w)))
 }
 
 async fn register_status(
@@ -112,7 +125,7 @@ async fn register_status(
     headers: HeaderMap,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
     let w = authenticate(&state, &headers)?;
-    Ok(Json(status_of(&w)))
+    Ok(Json(status_of(&state, &w)))
 }
 
 async fn post_batch(
@@ -147,12 +160,16 @@ async fn get_config(
 ) -> Result<Json<ConfigResponse>, StatusCode> {
     let w = authenticate(&state, &headers)?;
     require_approved(&w)?;
+    let child_id = w.child_id.clone().ok_or(StatusCode::CONFLICT)?;
     let now = now_ts();
     let db = state.db.lock();
-    let goal = store::get_goal(&db, &w.worker_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let goal = store::get_goal(&db, &child_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let overrides = store::list_overrides(&db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let usage = store::usage_totals(&db, &w.worker_id, now, state.tz_offset_s)
+    // Shared goal: usage and points are per child, summed across devices.
+    let usage = store::usage_totals(&db, &child_id, now, state.tz_offset_s)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let points_balance =
+        store::points_balance(&db, &child_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(ConfigResponse {
         rules: vec![], // worker carries the bundled rule set; master pushes overrides only (v1)
         overrides,
@@ -160,6 +177,7 @@ async fn get_config(
         thresholds: Thresholds::default(),
         usage,
         break_prompt_after_min: state.break_prompt_after_min as u32,
+        points_balance,
     }))
 }
 
@@ -167,15 +185,16 @@ async fn get_config(
 
 async fn dashboard_summary(
     State(state): State<AppState>,
-) -> Result<Json<Vec<ChildSummary>>, StatusCode> {
+) -> Result<Json<DashboardSummary>, StatusCode> {
     let now = now_ts();
     let db = state.db.lock();
     // Points are evaluated on dashboard load as well as hourly (freshness).
     crate::points_engine::evaluate_all(&db, now, state.tz_offset_s)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let summaries = store::child_summaries(&db, now, state.tz_offset_s, state.online_threshold_s)
+    let children = store::child_summaries(&db, now, state.tz_offset_s, state.online_threshold_s)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(summaries))
+    let pending = store::pending_workers(&db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(DashboardSummary { children, pending }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -231,17 +250,49 @@ async fn dashboard_uncategorized(
 
 #[derive(Debug, Deserialize)]
 struct ApproveBody {
+    /// Child name: matched case-insensitively against existing children
+    /// (that IS the merge operation), otherwise a new child is created.
     child_name: String,
 }
 
-async fn approve_child(
+async fn approve_worker(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<ApproveBody>,
 ) -> Result<StatusCode, StatusCode> {
     let db = state.db.lock();
-    let n = store::approve_worker(&db, &id, &body.child_name).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let child_id =
+        store::find_or_create_child(&db, &body.child_name).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let n = store::assign_worker_to_child(&db, &id, &child_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if n == 0 { Err(StatusCode::NOT_FOUND) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+#[derive(Debug, Deserialize)]
+struct AssignBody {
+    child_id: String,
+}
+
+/// Move a worker to a different child (the merge/reassign operation).
+async fn assign_worker(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<AssignBody>,
+) -> Result<StatusCode, StatusCode> {
+    let db = state.db.lock();
+    let n = store::assign_worker_to_child(&db, &id, &body.child_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if n == 0 { Err(StatusCode::NOT_FOUND) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+async fn list_all_workers(State(state): State<AppState>) -> Result<Json<Vec<WorkerInfo>>, StatusCode> {
+    let db = state.db.lock();
+    store::list_workers(&db).map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn list_all_children(State(state): State<AppState>) -> Result<Json<Vec<ChildInfo>>, StatusCode> {
+    let db = state.db.lock();
+    store::list_children(&db).map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn set_child_goal(
@@ -261,6 +312,8 @@ async fn set_category_override(
 ) -> Result<StatusCode, StatusCode> {
     let db = state.db.lock();
     store::set_override(&db, &body.app_name, body.category)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    store::recategorize_sessions(&db, &body.app_name, body.category)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -324,8 +377,8 @@ mod tests {
         let batch = serde_json::to_string(&BatchUpload { sessions: vec![] }).unwrap();
         let resp = app.clone().oneshot(authed(json_req("POST", "/api/v1/sessions/batch", Some(batch)), "w1", "tok-1")).await.unwrap();
         assert_eq!(resp.status(), SC::FORBIDDEN);
-        // 4. Approve.
-        let resp = app.clone().oneshot(json_req("POST", "/api/v1/children/w1/approve", Some(r#"{"child_name":"Ada"}"#.into()))).await.unwrap();
+        // 4. Approve (by name -> creates the child).
+        let resp = app.clone().oneshot(json_req("POST", "/api/v1/workers/w1/approve", Some(r#"{"child_name":"Ada"}"#.into()))).await.unwrap();
         assert_eq!(resp.status(), SC::NO_CONTENT);
         // 5. Status poll -> approved with name.
         let resp = app.clone().oneshot(authed(json_req("GET", "/api/v1/register/status", None), "w1", "tok-1")).await.unwrap();
@@ -352,8 +405,12 @@ mod tests {
         let state = test_state();
         let app = router(state);
         app.clone().oneshot(json_req("POST", "/api/v1/register", Some(register_body("w1")))).await.unwrap();
-        app.clone().oneshot(json_req("POST", "/api/v1/children/w1/approve", Some(r#"{"child_name":"Ada"}"#.into()))).await.unwrap();
-        app.clone().oneshot(json_req("POST", "/api/v1/children/w1/goal", Some(r#"{"daily_min":120,"weekly_min":600}"#.into()))).await.unwrap();
+        app.clone().oneshot(json_req("POST", "/api/v1/workers/w1/approve", Some(r#"{"child_name":"Ada"}"#.into()))).await.unwrap();
+        // Goal path takes the CHILD id now; resolve it.
+        let children_resp = app.clone().oneshot(json_req("GET", "/api/v1/children", None)).await.unwrap();
+        let children = body_json(children_resp).await;
+        let child_id = children[0]["id"].as_str().unwrap().to_string();
+        app.clone().oneshot(json_req("POST", &format!("/api/v1/children/{child_id}/goal"), Some(r#"{"daily_min":120,"weekly_min":600}"#.into()))).await.unwrap();
 
         let batch = serde_json::to_string(&BatchUpload {
             sessions: vec![SessionRecord {
@@ -372,33 +429,34 @@ mod tests {
         // Retry: idempotent.
         let resp = app.clone().oneshot(authed(json_req("POST", "/api/v1/sessions/batch", Some(batch)), "w1", "tok-1")).await.unwrap();
         assert_eq!(body_json(resp).await["accepted"], 0);
-        // Config carries goal + thresholds.
+        // Config carries goal + thresholds + points.
         let resp = app.clone().oneshot(authed(json_req("GET", "/api/v1/config", None), "w1", "tok-1")).await.unwrap();
         let v = body_json(resp).await;
         assert_eq!(v["goal"]["daily_min"], 120);
         assert_eq!(v["thresholds"]["nudge_pct"], 90);
         assert_eq!(v["break_prompt_after_min"], 40);
+        assert_eq!(v["points_balance"], 0);
     }
 
     #[tokio::test]
     async fn heartbeat_flips_online_status() {
         let app = router(test_state());
         app.clone().oneshot(json_req("POST", "/api/v1/register", Some(register_body("w1")))).await.unwrap();
-        app.clone().oneshot(json_req("POST", "/api/v1/children/w1/approve", Some(r#"{"child_name":"Ada"}"#.into()))).await.unwrap();
+        app.clone().oneshot(json_req("POST", "/api/v1/workers/w1/approve", Some(r#"{"child_name":"Ada"}"#.into()))).await.unwrap();
         // Offline before any heartbeat.
         let resp = app.clone().oneshot(json_req("GET", "/api/v1/dashboard/summary", None)).await.unwrap();
-        assert_eq!(body_json(resp).await[0]["online"], false);
+        assert_eq!(body_json(resp).await["children"][0]["online"], false);
         // Heartbeat -> online.
         let resp = app.clone().oneshot(authed(json_req("POST", "/api/v1/heartbeat", None), "w1", "tok-1")).await.unwrap();
         assert!(body_json(resp).await["server_time"].as_i64().unwrap() > 0);
         let resp = app.clone().oneshot(json_req("GET", "/api/v1/dashboard/summary", None)).await.unwrap();
-        assert_eq!(body_json(resp).await[0]["online"], true);
+        assert_eq!(body_json(resp).await["children"][0]["online"], true);
     }
 
     #[tokio::test]
     async fn approve_unknown_worker_404() {
         let app = router(test_state());
-        let resp = app.clone().oneshot(json_req("POST", "/api/v1/children/ghost/approve", Some(r#"{"child_name":"X"}"#.into()))).await.unwrap();
+        let resp = app.clone().oneshot(json_req("POST", "/api/v1/workers/ghost/approve", Some(r#"{"child_name":"X"}"#.into()))).await.unwrap();
         assert_eq!(resp.status(), SC::NOT_FOUND);
     }
 }

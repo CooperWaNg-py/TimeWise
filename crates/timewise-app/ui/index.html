@@ -64,7 +64,7 @@
     </div>
   </section>
 
-  <!-- Worker setup: pairing (US-02) -->
+  <!-- Worker setup: pairing (US-02) — only shown while unpaired -->
   <section id="view-worker" class="hidden">
     <div class="card">
       <h2>Connect to a parent (master)</h2>
@@ -77,9 +77,20 @@
       </div>
       <div id="pair-status" class="muted"></div>
     </div>
-    <div class="card">
-      <h2>Status</h2>
-      <div id="worker-status" class="muted">Loading…</div>
+  </section>
+
+  <!-- Child's own status screen (after pairing) -->
+  <section id="view-child-status" class="hidden">
+    <div class="card" style="text-align:center; padding:40px">
+      <div style="font-size:48px">⏱️</div>
+      <h2 style="font-size:22px">My screen time today</h2>
+      <div class="big" id="cs-today" style="font-size:42px">0m</div>
+      <div id="cs-goal-row" class="hidden" style="max-width:420px;margin:12px auto">
+        <div class="bar-outer"><div class="bar-inner" id="cs-goal-bar" style="width:0%"></div></div>
+        <div class="muted" id="cs-goal-text"></div>
+      </div>
+      <div class="row" style="justify-content:center"><span class="big" id="cs-points">0</span><span class="muted">⭐ points earned</span></div>
+      <div class="muted" id="cs-note">Loading…</div>
     </div>
   </section>
 
@@ -87,6 +98,7 @@
   <section id="view-overview" class="hidden">
     <div id="pending-card" class="card hidden">
       <h2>⏳ Pending approvals</h2>
+      <datalist id="children-names"></datalist>
       <div id="pending-list"></div>
     </div>
     <div class="grid" id="children-grid"></div>
@@ -119,6 +131,16 @@
         <button class="btn primary" id="btn-save-goal">Save goal</button>
         <span id="goal-status" class="muted"></span>
       </div>
+    </div>
+    <div class="card">
+      <h2>Devices &amp; children</h2>
+      <p class="muted">One child can use several computers or accounts — assign each device to the right child and their time, goals, and points merge automatically.</p>
+      <table id="merge-table"><thead><tr><th>Computer</th><th>User</th><th>OS</th><th>Child</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <h2>Me (parent)</h2>
+      <div class="row"><label><input type="checkbox" id="track-self" /> Also track my own usage on this computer</label></div>
+      <p class="muted">Your account appears as a device above; approve and assign it to see it on the dashboard.</p>
     </div>
     <div class="card">
       <h2>App categories</h2>

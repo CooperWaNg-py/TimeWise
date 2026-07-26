@@ -2,6 +2,7 @@
 //! notifications) and, from Unit 3, the master role (server + dashboard).
 
 pub mod config;
+pub mod idle;
 pub mod master_server;
 pub mod mdns_announcer;
 pub mod notify;

@@ -1,4 +1,4 @@
-/* TimeWise UI: role screen, worker pairing, master dashboard.
+/* TimeWise UI: role screen, worker pairing + child status, master dashboard.
    Talks to the Tauri shell via window.__TAURI__.core.invoke and to the
    embedded master API over plain fetch (localhost). */
 
@@ -8,23 +8,26 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI
   ? TAURI.core.invoke
   : async (cmd) => {
-      if (cmd === "get_state") return { role: "master", port: 47820, worker_id: "demo", masters: [] };
+      if (cmd === "get_state")
+        return { role: "master", port: 47820, worker_id: "demo", masters: [], track_self: false, idle_threshold_s: 300 };
       throw new Error("not running inside the TimeWise app");
     };
 const $ = (sel) => document.querySelector(sel);
 
 let uiState = null;
 let apiBase = null; // set when role === 'master'
-let summary = [];
+let summary = { children: [], pending: [] };
+let children = [];
+let workers = [];
 let charts = {};
+let currentView = "overview";
 
 function show(viewId) {
+  currentView = viewId.replace("view-", "");
   for (const s of document.querySelectorAll("main > section")) s.classList.add("hidden");
   $("#" + viewId).classList.remove("hidden");
-  if (["overview", "child", "settings"].includes(viewId.replace("view-", ""))) {
-    for (const b of document.querySelectorAll("nav button"))
-      b.classList.toggle("active", b.dataset.view === viewId.replace("view-", ""));
-  }
+  for (const b of document.querySelectorAll("nav button"))
+    b.classList.toggle("active", b.dataset.view === currentView);
 }
 
 function fmt(s) {
@@ -33,9 +36,26 @@ function fmt(s) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-function renderChart(id, config) {
-  if (charts[id]) charts[id].destroy();
-  charts[id] = new Chart($("#" + id), config);
+/* Charts update IN PLACE (no destroy/recreate) so the page height never
+   changes and the scroll position survives the 15s auto-refresh. */
+function renderChart(id, labels, data, colors) {
+  const existing = charts[id];
+  if (existing) {
+    existing.data.labels = labels;
+    existing.data.datasets[0].data = data;
+    existing.data.datasets[0].backgroundColor = colors;
+    existing.update("none");
+    return;
+  }
+  charts[id] = new Chart($("#" + id), {
+    type: "bar",
+    data: { labels, datasets: [{ data, backgroundColor: colors }] },
+    options: {
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } },
+    },
+  });
 }
 
 /* ---------- boot ---------- */
@@ -66,21 +86,44 @@ document.querySelectorAll("#view-role .choice").forEach((el) =>
   })
 );
 
-/* ---------- worker ---------- */
+/* ---------- worker (child's own UI) ---------- */
 
 async function bootWorker() {
-  show("view-worker");
-  refreshWorkerStatus();
-  setInterval(refreshWorkerStatus, 10000);
+  uiState = await invoke("get_state");
+  if (uiState.masters.length === 0) {
+    show("view-worker"); // pairing UI
+  } else {
+    show("view-child-status"); // the child's own screen
+    refreshChildStatus();
+    setInterval(refreshChildStatus, 30000);
+  }
 }
 
-async function refreshWorkerStatus() {
+async function refreshChildStatus() {
   uiState = await invoke("get_state");
-  const el = $("#worker-status");
-  if (uiState.masters.length === 0) {
-    el.textContent = "Not paired with any parent yet. Tracking has started; data is stored safely on this device until a parent approves you.";
-  } else {
-    el.innerHTML = "Tracking is on. Paired with:<br>" + uiState.masters.map((m) => `• ${m.base_url}`).join("<br>");
+  const m = uiState.masters[0];
+  if (!m) return;
+  try {
+    const resp = await fetch(`${m.base_url}/api/v1/config`, {
+      headers: { authorization: `Bearer ${m.token}`, "x-worker-id": uiState.worker_id },
+    });
+    if (!resp.ok) throw new Error(String(resp.status));
+    const cfg = await resp.json();
+    $("#cs-today").textContent = fmt(cfg.usage.today_s);
+    $("#cs-points").textContent = cfg.points_balance;
+    if (cfg.goal.daily_min) {
+      const goalS = cfg.goal.daily_min * 60;
+      const pct = Math.min(100, Math.round((cfg.usage.today_s * 100) / goalS));
+      $("#cs-goal-row").classList.remove("hidden");
+      $("#cs-goal-text").textContent = `${pct}% of today's ${cfg.goal.daily_min}-minute goal`;
+      $("#cs-goal-bar").style.width = pct + "%";
+      $("#cs-goal-bar").style.background = pct >= 100 ? "var(--bad)" : pct >= 90 ? "var(--warn)" : "var(--good)";
+    } else {
+      $("#cs-goal-row").classList.add("hidden");
+    }
+    $("#cs-note").textContent = "Tracking is on. You're doing great!";
+  } catch (e) {
+    $("#cs-note").textContent = "Can't reach the parent right now — still tracking, everything is saved on this device.";
   }
 }
 
@@ -104,7 +147,8 @@ async function pair(url) {
   try {
     const msg = await invoke("pair_master", { baseUrl: url });
     $("#pair-status").textContent = msg + " — the parent must approve this device on their dashboard.";
-    refreshWorkerStatus();
+    // Move to the child's own status screen right away.
+    setTimeout(bootWorker, 1200);
   } catch (e) {
     $("#pair-status").innerHTML = `<span class="error">${e}</span>`;
   }
@@ -120,60 +164,57 @@ async function api(path, opts) {
 
 async function refreshAll() {
   summary = await api("/dashboard/summary");
+  children = await api("/children");
   renderPending();
   renderOverview();
   fillChildSelects();
-  if (!$("#view-child").classList.contains("hidden")) renderChildDetail();
-  if (!$("#view-settings").classList.contains("hidden")) renderSettings();
+  if (currentView === "child") renderChildDetail();
+  if (currentView === "settings") renderSettings();
 }
 
 function renderPending() {
-  const pending = summary.filter((c) => !c.approved);
-  $("#pending-card").classList.toggle("hidden", pending.length === 0);
-  $("#pending-list").innerHTML = pending
+  $("#pending-card").classList.toggle("hidden", summary.pending.length === 0);
+  $("#pending-list").innerHTML = summary.pending
     .map(
-      (c) => `<div class="row"><span>${c.hostname || c.worker_id} (${c.os_user || "?"})</span>
-        <input placeholder="Child's name" id="name-${c.worker_id}" size="12" />
-        <button class="btn primary" onclick="approve('${c.worker_id}')">Approve</button></div>`
+      (w, i) => `<div class="row"><span><b>${w.hostname || "?"}</b> · user ${w.os_user || "?"} · ${w.os}</span>
+        <input placeholder="Child's name" id="pend-name-${i}" list="children-names" size="14" />
+        <button class="btn primary" onclick="approve('${w.worker_id}', ${i})">Approve</button></div>`
     )
     .join("");
+  $("#children-names").innerHTML = children.map((c) => `<option value="${c.name}">`).join("");
 }
 
-async function approve(id) {
-  const name = $("#name-" + id).value.trim() || "Child";
-  await api(`/children/${id}/approve`, {
+async function approve(workerId, idx) {
+  const name = ($("#pend-name-" + idx).value || "").trim() || "Child";
+  await api(`/workers/${workerId}/approve`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ child_name: name }),
   });
   refreshAll();
 }
 
 function renderOverview() {
-  const approved = summary.filter((c) => c.approved);
-  $("#children-grid").innerHTML = approved
+  $("#children-grid").innerHTML = summary.children
     .map(
       (c) => `<div class="card">
-        <h2><span class="dot ${c.online ? "on" : "off"}"></span>${c.child_name || "Child"}</h2>
+        <h2><span class="dot ${c.online ? "on" : "off"}"></span>${c.name}</h2>
         <div class="row"><span class="big">${fmt(c.today_s)}</span><span class="muted">today</span></div>
         <div class="muted">${fmt(c.week_s)} this week · ⭐ ${c.points_balance} points</div>
         ${c.online ? "" : '<div class="error">Disconnected — check the child’s computer</div>'}
       </div>`
     )
     .join("");
-  renderChart("chart-overview", {
-    type: "bar",
-    data: {
-      labels: approved.map((c) => c.child_name || "Child"),
-      datasets: [{ label: "Today (minutes)", data: approved.map((c) => Math.round(c.today_s / 60)), backgroundColor: "#4f7cff" }],
-    },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
-  });
+  renderChart(
+    "chart-overview",
+    summary.children.map((c) => c.name),
+    summary.children.map((c) => Math.round(c.today_s / 60)),
+    "#4f7cff"
+  );
 }
 
 function fillChildSelects() {
-  const approved = summary.filter((c) => c.approved);
   for (const sel of [$("#child-select"), $("#goal-child")]) {
     const cur = sel.value;
-    sel.innerHTML = approved.map((c) => `<option value="${c.worker_id}">${c.child_name || "Child"}</option>`).join("");
+    sel.innerHTML = children.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
   }
 }
@@ -201,49 +242,80 @@ async function renderChildDetail() {
   $("#app-table tbody").innerHTML = d.breakdown
     .map((b) => `<tr><td>${b.app_name}</td><td>${b.category}</td><td>${fmt(b.duration_s)}</td><td>${b.pct.toFixed(1)}%</td></tr>`)
     .join("") || '<tr><td colspan="4" class="muted">No data in this range yet.</td></tr>';
-  renderChart("chart-tod", {
-    type: "bar",
-    data: {
-      labels: ["Morning", "Afternoon", "Evening", "Night"],
-      datasets: [{
-        label: "Minutes",
-        data: [d.tod.morning_s, d.tod.afternoon_s, d.tod.evening_s, d.tod.night_s].map((s) => Math.round(s / 60)),
-        backgroundColor: ["#8ecae6", "#4f7cff", "#e0a02e", "#6c5ce7"],
-      }],
-    },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
-  });
+  renderChart(
+    "chart-tod",
+    ["Morning", "Afternoon", "Evening", "Night"],
+    [d.tod.morning_s, d.tod.afternoon_s, d.tod.evening_s, d.tod.night_s].map((s) => Math.round(s / 60)),
+    ["#8ecae6", "#4f7cff", "#e0a02e", "#6c5ce7"]
+  );
   $("#points-balance").textContent = d.points_balance;
   $("#points-table tbody").innerHTML = d.points_history
     .map((p) => `<tr><td>${p.date}</td><td>+${p.points}</td><td>${p.reason.replaceAll("_", " ")}</td></tr>`)
     .join("") || '<tr><td colspan="3" class="muted">No points yet — set a goal in Settings.</td></tr>';
 }
 
+/* ---------- settings ---------- */
+
+let uncatApps = [];
+
 async function renderSettings() {
+  uiState = await invoke("get_state");
+  $("#track-self").checked = !!uiState.track_self;
+
   const id = $("#goal-child").value;
-  if (!id) return;
-  const d = await api(`/dashboard/child/${id}`);
-  $("#goal-daily").value = d.goal.daily_min ?? "";
-  $("#goal-weekly").value = d.goal.weekly_min ?? "";
-  const unc = await api(`/dashboard/uncategorized/${id}`);
-  const cats = ["Games", "Educational", "Entertainment", "Social Media", "Productivity", "Browsers", "Other"];
-  $("#uncat-table tbody").innerHTML = unc
+  if (id) {
+    const d = await api(`/dashboard/child/${id}`);
+    $("#goal-daily").value = d.goal.daily_min ?? "";
+    $("#goal-weekly").value = d.goal.weekly_min ?? "";
+    uncatApps = await api(`/dashboard/uncategorized/${id}`);
+  }
+
+  // Merge: every known device, with a child picker (iteration 2).
+  workers = await api("/workers");
+  $("#merge-table tbody").innerHTML = workers
     .map(
-      (a) => `<tr><td>${a.app_name}</td><td>${fmt(a.total_s)}</td><td>
-        <select id="cat-${CSS.escape(a.app_name)}">${cats.map((c) => `<option>${c}</option>`).join("")}</select>
-        <button class="btn" onclick="setOverride('${a.app_name.replaceAll("'", "\\'")}')">Save</button></td></tr>`
+      (w) => `<tr><td>${w.hostname || "?"}</td><td>${w.os_user || "?"}</td><td>${w.os}</td>
+        <td>${w.approved ? childPicker(w) : "<span class='muted'>pending approval</span>"}</td></tr>`
+    )
+    .join("");
+
+  const cats = ["Games", "Educational", "Entertainment", "Social Media", "Productivity", "Browsers", "Other"];
+  $("#uncat-table tbody").innerHTML = uncatApps
+    .map(
+      (a, i) => `<tr><td>${a.app_name}</td><td>${fmt(a.total_s)}</td><td>
+        <select id="cat-${i}">${cats.map((c) => `<option>${c}</option>`).join("")}</select>
+        <button class="btn" onclick="setOverride(${i})">Save</button></td></tr>`
     )
     .join("") || '<tr><td colspan="3" class="muted">Everything is categorized. 🎉</td></tr>';
 }
 
-async function setOverride(appName) {
-  const sel = document.getElementById("cat-" + CSS.escape(appName));
+function childPicker(w) {
+  const opts = children
+    .map((c) => `<option value="${c.id}" ${c.id === w.child_id ? "selected" : ""}>${c.name}</option>`)
+    .join("");
+  return `<select onchange="assignWorker('${w.worker_id}', this.value)">${opts}</select>`;
+}
+
+async function assignWorker(workerId, childId) {
+  await api(`/workers/${workerId}/assign`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ child_id: childId }),
+  });
+  refreshAll();
+}
+
+async function setOverride(i) {
+  const a = uncatApps[i];
+  const sel = $("#cat-" + i);
   await api("/categories/override", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ app_name: appName, category: sel.value }),
+    body: JSON.stringify({ app_name: a.app_name, category: sel.value }),
   });
   renderSettings();
 }
+
+$("#track-self").addEventListener("change", async (e) => {
+  await invoke("set_track_self", { enabled: e.target.checked });
+});
 
 $("#btn-save-goal").addEventListener("click", async () => {
   const id = $("#goal-child").value;

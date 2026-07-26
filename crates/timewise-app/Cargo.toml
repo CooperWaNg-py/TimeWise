@@ -23,8 +23,13 @@ auto-launch = "0.5"
 parking_lot = "0.12"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

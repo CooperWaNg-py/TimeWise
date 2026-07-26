@@ -7,6 +7,8 @@
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::path::PathBuf;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use timewise_app::config::{Config, MasterRegistration, Role};
@@ -28,6 +30,8 @@ struct UiState {
     port: u16,
     worker_id: String,
     masters: Vec<MasterRegistration>,
+    track_self: bool,
+    idle_threshold_s: u64,
 }
 
 struct TauriNotifier(AppHandle);
@@ -44,7 +48,12 @@ fn local_tz_offset_s() -> i32 {
     chrono::Local::now().offset().local_minus_utc()
 }
 
-fn start_master(dir: PathBuf, cfg: Config) {
+fn start_master(app: &AppHandle, shared: &Shared, cfg: Config) {
+    let dir = shared.dir.clone();
+    enable_autostart();
+    if cfg.track_self {
+        start_self_worker(app, shared, &cfg);
+    }
     tauri::async_runtime::spawn(async move {
         let conn = match master_store::open(&Config::master_db_path(&dir)) {
             Ok(c) => c,
@@ -86,15 +95,51 @@ fn start_master(dir: PathBuf, cfg: Config) {
     });
 }
 
+/// Optional self-tracking on a master: register a worker pointed at our own
+/// server. It appears as a pending device; the parent approves/merges it like
+/// any other.
+fn start_self_worker(app: &AppHandle, shared: &Shared, cfg: &Config) {
+    let dir = shared.dir.clone();
+    let token = cfg.self_token.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if cfg.self_token.is_none() {
+        let mut cfg2 = cfg.clone();
+        cfg2.self_token = Some(token.clone());
+        let _ = cfg2.save_to(&dir);
+    }
+    if let Ok(conn) = master_store::open(&Config::master_db_path(&dir)) {
+        let req = RegisterRequest {
+            worker_id: format!("{}-self", cfg.worker_id),
+            hostname: machine_hostname(),
+            os: std::env::consts::OS.into(),
+            os_user: os_username(),
+            token: token.clone(),
+        };
+        let now = chrono::Utc::now().timestamp();
+        if let Err(e) = master_store::upsert_worker(&conn, &req, now) {
+            eprintln!("[timewise] self-track registration failed: {e}");
+        }
+    }
+    let mut worker_cfg = cfg.clone();
+    worker_cfg.worker_id = format!("{}-self", cfg.worker_id);
+    worker_cfg.masters = vec![MasterRegistration {
+        base_url: format!("http://127.0.0.1:{}", cfg.port),
+        token,
+    }];
+    start_worker(app, shared, worker_cfg);
+}
+
 fn enable_autostart() {
     if let Ok(exe) = std::env::current_exe() {
         // auto-launch's constructor is OS-dependent (macOS takes use_launch_agent).
+        // macOS: LaunchAgent works for unpackaged binaries; the AppleScript
+        // login-item path (false) requires an .app bundle and silently fails.
         #[cfg(target_os = "macos")]
-        let auto = auto_launch::AutoLaunch::new("TimeWise", &exe.to_string_lossy(), false, &[] as &[&str]);
+        let auto = auto_launch::AutoLaunch::new("TimeWise", &exe.to_string_lossy(), true, &[] as &[&str]);
         #[cfg(not(target_os = "macos"))]
         let auto = auto_launch::AutoLaunch::new("TimeWise", &exe.to_string_lossy(), &[] as &[&str]);
-        if let Err(e) = auto.enable() {
-            eprintln!("[timewise] autostart registration failed: {e}");
+        match auto.enable() {
+            Ok(()) => println!("[timewise] autostart enabled"),
+            Err(e) => eprintln!("[timewise] autostart registration failed: {e}"),
         }
     }
 }
@@ -122,7 +167,18 @@ fn start_worker(app: &AppHandle, shared: &Shared, cfg: Config) {
 fn machine_hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "unknown".into())
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| {
+            // GUI apps on macOS often lack HOSTNAME in their environment.
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|h| !h.is_empty())
+                .unwrap_or_else(|| "unknown".into())
+        })
 }
 
 fn os_username() -> String {
@@ -142,6 +198,8 @@ fn get_state(state: State<Shared>) -> UiState {
         port: cfg.port,
         worker_id: cfg.worker_id,
         masters: cfg.masters,
+        track_self: cfg.track_self,
+        idle_threshold_s: cfg.idle_threshold_s,
     }
 }
 
@@ -155,9 +213,23 @@ fn set_role(app: AppHandle, state: State<Shared>, role: String) -> Result<(), St
     });
     cfg.save_to(&state.dir).map_err(|e| e.to_string())?;
     match cfg.role {
-        Some(Role::Master) => start_master(state.dir.clone(), cfg),
+        Some(Role::Master) => start_master(&app, &state, cfg),
         Some(Role::Worker) => start_worker(&app, &state, cfg),
         None => {}
+    }
+    Ok(())
+}
+
+/// Master-only: toggle tracking of the parent's own account (iteration 2).
+#[tauri::command]
+fn set_track_self(app: AppHandle, state: State<Shared>, enabled: bool) -> Result<(), String> {
+    let mut cfg = Config::load_from(&state.dir).map_err(|e| e.to_string())?;
+    cfg.track_self = enabled;
+    cfg.save_to(&state.dir).map_err(|e| e.to_string())?;
+    if enabled {
+        start_self_worker(&app, &state, &cfg);
+    } else if let Some(tx) = state.worker_shutdown.lock().take() {
+        let _ = tx.send(true); // stop the self-tracking worker
     }
     Ok(())
 }
@@ -203,12 +275,43 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![get_state, set_role, discover, pair_master])
+        .invoke_handler(tauri::generate_handler![get_state, set_role, discover, pair_master, set_track_self])
         .setup(|app| {
+            // System tray: the app minimizes to the tray instead of quitting.
+            let show_item = MenuItemBuilder::with_id("show", "Show TimeWise").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit TimeWise").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&show_item, &quit_item]).build()?;
+            let mut tray = TrayIconBuilder::new().menu(&menu).tooltip("TimeWise");
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.on_menu_event(|app, event| match event.id().as_ref() {
+                "show" => {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                }
+                "quit" => app.exit(0),
+                _ => {}
+            })
+            .build(app)?;
+
+            // Close button hides to tray; real quit lives in the tray menu.
+            if let Some(window) = app.get_webview_window("main") {
+                let w = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
+
             let state = app.state::<Shared>();
             let cfg = Config::load_from(&state.dir).unwrap_or_else(|_| Config::new_first_run());
             match cfg.role {
-                Some(Role::Master) => start_master(state.dir.clone(), cfg),
+                Some(Role::Master) => start_master(&app.handle(), &state, cfg),
                 Some(Role::Worker) => start_worker(&app.handle(), &state, cfg),
                 None => {} // first-run role screen shown by the UI
             }

@@ -174,6 +174,16 @@ pub struct ConfigResponse {
     pub thresholds: Thresholds,
     pub usage: UsageTotals,
     pub break_prompt_after_min: u32,
+    /// Child's points balance (iteration 2; default for older masters).
+    #[serde(default)]
+    pub points_balance: i64,
+}
+
+/// A named child; one or more workers (computers / OS accounts) merge into it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildInfo {
+    pub id: String,
+    pub name: String,
 }
 
 /// Time-of-day bucket (BR4).
@@ -200,14 +210,20 @@ impl TodBucket {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChildSummary {
-    pub worker_id: String,
-    pub child_name: Option<String>,
-    pub approved: bool,
+    /// Child id (merged identity across devices).
+    pub id: String,
+    pub name: String,
     pub online: bool,
-    pub last_seen: Option<i64>,
     pub today_s: i64,
     pub week_s: i64,
     pub points_balance: i64,
+}
+
+/// Dashboard summary payload: merged children + unapproved workers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardSummary {
+    pub children: Vec<ChildSummary>,
+    pub pending: Vec<WorkerInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +257,9 @@ pub struct WorkerInfo {
     pub os: String,
     pub os_user: String,
     pub child_name: Option<String>,
+    /// Merged child identity (iteration 2); None until assigned.
+    #[serde(default)]
+    pub child_id: Option<String>,
     pub approved: bool,
     pub last_seen: Option<i64>,
     pub created_at: i64,
