@@ -491,6 +491,58 @@ pub fn tod_distribution(
     Ok(dist)
 }
 
+/// One app with its effective category for the category editor:
+/// parent override wins; otherwise the most recently recorded category.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AppCategoryRow {
+    pub app_name: String,
+    pub category: Category,
+    pub total_s: i64,
+    pub is_override: bool,
+}
+
+pub fn apps_with_categories(conn: &Connection, child_id: &str) -> Result<Vec<AppCategoryRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.app_name, s.category, s.start_ts, s.duration_s FROM sessions s
+         JOIN workers w ON s.worker_id = w.worker_id
+         WHERE w.child_id = ?1 ORDER BY s.start_ts",
+    )?;
+    let rows = stmt
+        .query_map(params![child_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    let mut by_app: std::collections::HashMap<String, (String, i64, i64)> = Default::default(); // (latest_cat, latest_ts, total)
+    for (app, cat, start, dur) in &rows {
+        let entry = by_app.entry(app.clone()).or_insert_with(|| (cat.clone(), *start, 0));
+        if *start >= entry.1 {
+            entry.0 = cat.clone();
+            entry.1 = *start;
+        }
+        entry.2 += dur;
+    }
+    let overrides = list_overrides(conn)?;
+    let mut out: Vec<AppCategoryRow> = by_app
+        .into_iter()
+        .map(|(app_name, (cat, _, total_s))| {
+            let o = overrides.iter().find(|o| o.app_name.eq_ignore_ascii_case(&app_name));
+            AppCategoryRow {
+                app_name,
+                category: o.map(|o| o.category).unwrap_or_else(|| cat.parse().unwrap_or(Category::Other)),
+                total_s,
+                is_override: o.is_some(),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.total_s.cmp(&a.total_s));
+    Ok(out)
+}
+
 /// Apps currently landing in "Other" across the child's devices (US-11 AC3).
 pub fn uncategorized_apps(conn: &Connection, child_id: &str) -> Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare(
@@ -713,6 +765,29 @@ mod tests {
         // Idempotent: second migrate is a no-op.
         migrate(&conn).unwrap();
         assert_eq!(list_children(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn apps_editor_reflects_override_and_latest() {
+        let conn = setup();
+        register(&conn, "w1");
+        let child = approve_named(&conn, "w1", "Ada");
+        let cat = Categorizer::from_bundled();
+        // Safari recorded as Browsers (two sessions), MysteryApp as Other.
+        insert_sessions(&conn, "w1", &[
+            session("s1", "Safari", 100, 60),
+            session("s2", "MysteryApp", 200, 30),
+        ], &cat).unwrap();
+        let apps = apps_with_categories(&conn, &child).unwrap();
+        let safari = apps.iter().find(|a| a.app_name == "Safari").unwrap();
+        assert_eq!(safari.category, Category::Browsers);
+        assert!(!safari.is_override);
+        // Override wins and is flagged.
+        set_override(&conn, "Safari", Category::Educational).unwrap();
+        let apps = apps_with_categories(&conn, &child).unwrap();
+        let safari = apps.iter().find(|a| a.app_name == "Safari").unwrap();
+        assert_eq!(safari.category, Category::Educational);
+        assert!(safari.is_override);
     }
 
     #[test]

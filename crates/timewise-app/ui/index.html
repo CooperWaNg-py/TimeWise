@@ -83,18 +83,22 @@
     </div>
   </section>
 
-  <!-- Child's own status screen (after pairing) -->
+  <!-- Child's own status screen (after pairing) — compact window -->
   <section id="view-child-status" class="hidden">
-    <div class="card" style="text-align:center; padding:40px">
-      <div style="font-size:48px">⏱️</div>
-      <h2 style="font-size:22px">My screen time today</h2>
-      <div class="big" id="cs-today" style="font-size:42px">0m</div>
-      <div id="cs-goal-row" class="hidden" style="max-width:420px;margin:12px auto">
+    <div class="card" style="text-align:center; padding:20px">
+      <div style="font-size:30px">⏱️</div>
+      <h2 style="font-size:16px">My screen time today</h2>
+      <div class="big" id="cs-today" style="font-size:34px">0m</div>
+      <div id="cs-goal-row" class="hidden" style="max-width:320px;margin:10px auto">
         <div class="bar-outer"><div class="bar-inner" id="cs-goal-bar" style="width:0%"></div></div>
-        <div class="muted" id="cs-goal-text"></div>
+        <div class="muted" id="cs-goal-text" style="font-size:12px"></div>
       </div>
-      <div class="row" style="justify-content:center"><span class="big" id="cs-points">0</span><span class="muted">⭐ points earned</span></div>
-      <div class="muted" id="cs-note">Loading…</div>
+      <div class="row" style="justify-content:center; margin:6px 0"><span class="big" id="cs-points" style="font-size:22px">0</span><span class="muted">⭐ points</span></div>
+      <div class="muted" id="cs-note" style="font-size:12px">Loading…</div>
+    </div>
+    <div class="card" style="padding:14px">
+      <h2 style="font-size:14px">My apps today</h2>
+      <table id="cs-apps" style="font-size:13px"><thead><tr><th>App</th><th>Time</th></tr></thead><tbody></tbody></table>
     </div>
   </section>
 
@@ -148,8 +152,8 @@
     </div>
     <div class="card">
       <h2>App categories</h2>
-      <h3>Uncategorized apps (currently "Other")</h3>
-      <table id="uncat-table"><thead><tr><th>App</th><th>Total time</th><th>Set category</th></tr></thead><tbody></tbody></table>
+      <p class="muted">Every app this child has used. Change a category and it applies to all recorded time, past and future.</p>
+      <table id="uncat-table"><thead><tr><th>App</th><th>Total time</th><th>Category</th></tr></thead><tbody></tbody></table>
     </div>
   </section>
 </main>

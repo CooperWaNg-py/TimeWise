@@ -157,6 +157,24 @@ fn start_worker(app: &AppHandle, shared: &Shared, cfg: Config) {
         }
     };
     enable_autostart();
+    // Self-healing hostnames: registration is an idempotent upsert, so
+    // re-registering on every start repairs stale/unknown device names.
+    for m in &cfg.masters {
+        let base = m.base_url.clone();
+        let client = timewise_app::sync::ReqwestClient::new(&base);
+        let req = RegisterRequest {
+            worker_id: cfg.worker_id.clone(),
+            hostname: machine_hostname(),
+            os: std::env::consts::OS.into(),
+            os_user: os_username(),
+            token: m.token.clone(),
+        };
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = timewise_app::pairing::register_with_master(&client, &req).await {
+                eprintln!("[timewise] re-register with {base} failed: {e}");
+            }
+        });
+    }
     let (tx, rx) = tokio::sync::watch::channel(false);
     *shared.worker_shutdown.lock() = Some(tx);
     let rt = WorkerRuntime::new(cfg, conn, ActiveWinPosRs, TauriNotifier(app.clone()));
@@ -212,6 +230,7 @@ fn set_role(app: AppHandle, state: State<Shared>, role: String) -> Result<(), St
         _ => return Err(format!("invalid role: {role}")),
     });
     cfg.save_to(&state.dir).map_err(|e| e.to_string())?;
+    apply_window_size(&app, cfg.role);
     match cfg.role {
         Some(Role::Master) => start_master(&app, &state, cfg),
         Some(Role::Worker) => start_worker(&app, &state, cfg),
@@ -243,9 +262,38 @@ async fn discover() -> Result<Vec<String>, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Child's own view: today's per-app breakdown from the LOCAL buffer
+/// (works even when the master is unreachable).
+#[derive(Serialize)]
+struct MyUsage {
+    today_s: i64,
+    apps: Vec<timewise_core::model::AppBreakdown>,
+}
+
 #[tauri::command]
-async fn pair_master(app: AppHandle, state: State<'_, Shared>, base_url: String) -> Result<String, String> {
-    let mut cfg = Config::load_from(&state.dir).map_err(|e| e.to_string())?;
+fn get_my_usage(state: State<Shared>) -> Result<MyUsage, String> {
+    let conn = worker_runtime::open_buffer(&state.dir).map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().timestamp();
+    let day_from = timewise_core::timeutil::day_start(now, local_tz_offset_s());
+    let rows = timewise_core::store::worker::buffer_breakdown(&conn, day_from, now)
+        .map_err(|e| e.to_string())?;
+    let today_s = rows.first().map(|r| r.1).unwrap_or(0);
+    Ok(MyUsage { today_s, apps: rows.into_iter().map(|r| r.0).collect() })
+}
+
+/// Compact window for the child, roomy window for the parent.
+fn apply_window_size(app: &AppHandle, role: Option<Role>) {
+    if let Some(w) = app.get_webview_window("main") {
+        let (width, height) = match role {
+            Some(Role::Worker) => (400.0, 640.0),
+            _ => (1100.0, 800.0),
+        };
+        let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+    }
+}
+
+#[tauri::command]
+async fn pair_master(app: AppHandle, state: State<'_, Shared>, base_url: String) -> Result<String, String> {let mut cfg = Config::load_from(&state.dir).map_err(|e| e.to_string())?;
     if cfg.masters.iter().any(|m| m.base_url == base_url) {
         return Ok("already paired".into());
     }
@@ -275,7 +323,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![get_state, set_role, discover, pair_master, set_track_self])
+        .invoke_handler(tauri::generate_handler![get_state, set_role, discover, pair_master, set_track_self, get_my_usage])
         .setup(|app| {
             // System tray: the app minimizes to the tray instead of quitting.
             let show_item = MenuItemBuilder::with_id("show", "Show TimeWise").build(app)?;
@@ -310,6 +358,7 @@ fn main() {
 
             let state = app.state::<Shared>();
             let cfg = Config::load_from(&state.dir).unwrap_or_else(|_| Config::new_first_run());
+            apply_window_size(&app.handle(), cfg.role);
             match cfg.role {
                 Some(Role::Master) => start_master(&app.handle(), &state, cfg),
                 Some(Role::Worker) => start_worker(&app.handle(), &state, cfg),

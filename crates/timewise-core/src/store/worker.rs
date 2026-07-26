@@ -1,6 +1,6 @@
 //! Worker-side store: local session buffer + per-master sync state (BR2).
 
-use crate::model::{Category, SessionRecord};
+use crate::model::{AppBreakdown, Category, SessionRecord};
 use rusqlite::{params, Connection, Result};
 
 pub const SCHEMA: &str = "
@@ -88,6 +88,49 @@ pub fn mark_synced(conn: &Connection, master_url: &str, ids: &[String], now: i64
     Ok(())
 }
 
+/// Per-app breakdown of the LOCAL buffer for [from, to) — powers the child's
+/// own view without depending on the master being reachable.
+pub fn buffer_breakdown(conn: &Connection, from: i64, to: i64) -> Result<Vec<(AppBreakdown, i64)> > {
+    let mut stmt = conn.prepare(
+        "SELECT app_name, category, start_ts, end_ts FROM sessions
+         WHERE end_ts > ?1 AND start_ts < ?2 ORDER BY start_ts",
+    )?;
+    let rows = stmt
+        .query_map(params![from, to], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    let mut by_app: std::collections::HashMap<String, (String, i64)> = Default::default();
+    let mut total = 0i64;
+    for (app, cat, start, end) in &rows {
+        let overlap = (end.min(&to) - start.max(&from)).max(0);
+        let entry = by_app.entry(app.clone()).or_insert_with(|| (cat.clone(), 0));
+        entry.1 += overlap;
+        total += overlap;
+    }
+    let mut out: Vec<(AppBreakdown, i64)> = by_app
+        .into_iter()
+        .map(|(app_name, (cat, duration_s))| {
+            (
+                AppBreakdown {
+                    app_name,
+                    category: cat.parse().unwrap_or(Category::Other),
+                    duration_s,
+                    pct: if total > 0 { duration_s as f64 * 100.0 / total as f64 } else { 0.0 },
+                },
+                total,
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.duration_s.cmp(&a.0.duration_s));
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +182,33 @@ mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].id, "s1"); // oldest first
         assert_eq!(batch[1].id, "s2");
+    }
+
+    #[test]
+    fn buffer_breakdown_aggregates_and_clamps() {
+        let conn = setup();
+        buffer_insert(&conn, &SessionRecord {
+            id: "a".into(), app_name: "Minecraft".into(), window_title: "M".into(),
+            category: Category::Games, start_ts: 100, end_ts: 400, duration_s: 300,
+        }).unwrap();
+        buffer_insert(&conn, &SessionRecord {
+            id: "b".into(), app_name: "Minecraft".into(), window_title: "M".into(),
+            category: Category::Games, start_ts: 500, end_ts: 560, duration_s: 60,
+        }).unwrap();
+        buffer_insert(&conn, &SessionRecord {
+            id: "c".into(), app_name: "Safari".into(), window_title: "S".into(),
+            category: Category::Browsers, start_ts: 200, end_ts: 250, duration_s: 50,
+        }).unwrap();
+        let rows = buffer_breakdown(&conn, 0, 1000).unwrap();
+        assert_eq!(rows[0].0.app_name, "Minecraft");
+        assert_eq!(rows[0].0.duration_s, 360);
+        assert_eq!(rows[0].0.category, Category::Games);
+        assert!((rows[0].0.pct - 360.0 * 100.0 / 410.0).abs() < 1e-9);
+        assert_eq!(rows[0].1, 410); // total travels with each row
+        // Clamp to [300, 500): only the tail of session a (300-400 = 100s) overlaps.
+        let clamped = buffer_breakdown(&conn, 300, 500).unwrap();
+        let total: i64 = clamped.iter().map(|r| r.0.duration_s).sum();
+        assert_eq!(total, 100);
     }
 
     #[test]

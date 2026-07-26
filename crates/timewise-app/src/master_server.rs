@@ -52,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/dashboard/summary", axum::routing::get(dashboard_summary))
         .route("/api/v1/dashboard/child/{id}", axum::routing::get(dashboard_child))
         .route("/api/v1/dashboard/uncategorized/{id}", axum::routing::get(dashboard_uncategorized))
+        .route("/api/v1/dashboard/apps/{id}", axum::routing::get(dashboard_apps))
         .route("/api/v1/workers", axum::routing::get(list_all_workers))
         .route("/api/v1/workers/{id}/approve", axum::routing::post(approve_worker))
         .route("/api/v1/workers/{id}/assign", axum::routing::post(assign_worker))
@@ -246,6 +247,14 @@ async fn dashboard_uncategorized(
     let db = state.db.lock();
     let apps = store::uncategorized_apps(&db, &id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(apps.into_iter().map(|(app_name, total_s)| UncategorizedApp { app_name, total_s }).collect()))
+}
+
+async fn dashboard_apps(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<store::AppCategoryRow>>, StatusCode> {
+    let db = state.db.lock();
+    store::apps_with_categories(&db, &id).map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[derive(Debug, Deserialize)]

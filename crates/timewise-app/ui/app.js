@@ -107,6 +107,14 @@ async function bootWorker() {
 
 async function refreshChildStatus() {
   uiState = await invoke("get_state");
+  // Local buffer: per-app usage works even when the master is unreachable.
+  try {
+    const mine = await invoke("get_my_usage");
+    $("#cs-today").textContent = fmt(mine.today_s);
+    $("#cs-apps tbody").innerHTML = mine.apps.slice(0, 12)
+      .map((a) => `<tr><td>${a.app_name}</td><td>${fmt(a.duration_s)}</td></tr>`)
+      .join("") || '<tr><td colspan="2" class="muted">Nothing tracked yet today.</td></tr>';
+  } catch (e) { /* buffer not ready yet */ }
   const m = uiState.masters[0];
   if (!m) return;
   try {
@@ -115,7 +123,7 @@ async function refreshChildStatus() {
     });
     if (!resp.ok) throw new Error(String(resp.status));
     const cfg = await resp.json();
-    $("#cs-today").textContent = fmt(cfg.usage.today_s);
+    $("#cs-today").textContent = fmt(Math.max(cfg.usage.today_s, 0));
     $("#cs-points").textContent = cfg.points_balance;
     if (cfg.goal.daily_min) {
       const goalS = cfg.goal.daily_min * 60;
@@ -262,7 +270,7 @@ async function renderChildDetail() {
 
 /* ---------- settings ---------- */
 
-let uncatApps = [];
+let allApps = [];
 
 async function renderSettings() {
   uiState = await invoke("get_state");
@@ -273,7 +281,7 @@ async function renderSettings() {
     const d = await api(`/dashboard/child/${id}`);
     $("#goal-daily").value = d.goal.daily_min ?? "";
     $("#goal-weekly").value = d.goal.weekly_min ?? "";
-    uncatApps = await api(`/dashboard/uncategorized/${id}`);
+    allApps = await api(`/dashboard/apps/${id}`);
   }
 
   // Merge: every known device, with a child picker (iteration 2).
@@ -285,14 +293,18 @@ async function renderSettings() {
     )
     .join("");
 
+  // Category editor: ALL apps, dropdown initialized to the CURRENT category.
+  // (This is also the fix for "save reverts to Games": selects used to start
+  // at the first option, so saving an untouched row wrote 'Games'.)
   const cats = ["Games", "Educational", "Entertainment", "Social Media", "Productivity", "Browsers", "Other"];
-  $("#uncat-table tbody").innerHTML = uncatApps
-    .map(
-      (a, i) => `<tr><td>${a.app_name}</td><td>${fmt(a.total_s)}</td><td>
-        <select id="cat-${i}">${cats.map((c) => `<option>${c}</option>`).join("")}</select>
-        <button class="btn" onclick="setOverride(${i})">Save</button></td></tr>`
-    )
-    .join("") || '<tr><td colspan="3" class="muted">Everything is categorized. 🎉</td></tr>';
+  $("#uncat-table tbody").innerHTML = allApps
+    .map((a, i) => {
+      const opts = cats.map((c) => `<option ${c === a.category ? "selected" : ""}>${c}</option>`).join("");
+      const other = a.category === "Other" ? ' style="color:var(--warn)"' : "";
+      return `<tr><td${other}>${a.app_name}${a.is_override ? ' <span class="pill" title="parent override">✎</span>' : ""}</td><td>${fmt(a.total_s)}</td>
+        <td><select id="cat-${i}">${opts}</select> <button class="btn" onclick="setOverride(${i})">Save</button></td></tr>`;
+    })
+    .join("") || '<tr><td colspan="3" class="muted">No apps recorded yet.</td></tr>';
 }
 
 function childPicker(w) {
@@ -310,7 +322,7 @@ async function assignWorker(workerId, childId) {
 }
 
 async function setOverride(i) {
-  const a = uncatApps[i];
+  const a = allApps[i];
   const sel = $("#cat-" + i);
   await api("/categories/override", {
     method: "POST", headers: { "content-type": "application/json" },
