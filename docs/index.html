@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TimeWise — Understand your screen time</title>
+<meta name="description" content="Privacy-first screen time tracking for families. All data stays on your home network. Awareness and positive reinforcement, not punishment." />
+<link rel="icon" type="image/png" href="img/logo.png" />
+<style>
+  :root { --bg:#0f1420; --card:#182032; --ink:#e8ecf5; --muted:#9aa7c2; --accent:#5f8bff; --accent2:#3ec98f; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); line-height:1.6; }
+  .wrap { max-width:1000px; margin:0 auto; padding:0 24px; }
+  header.hero { text-align:center; padding:90px 0 60px; background:radial-gradient(ellipse 60% 50% at 50% 0%, #1d2a47 0%, var(--bg) 70%); }
+  .hero img.logo { width:110px; height:110px; image-rendering:pixelated; }
+  .hero h1 { font-size:52px; letter-spacing:-1px; margin:14px 0 6px; }
+  .hero .tag { font-size:21px; color:var(--muted); }
+  .hero .badges { margin-top:26px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  .badge { background:var(--card); border:1px solid #2a3a5c; border-radius:999px; padding:6px 16px; font-size:14px; color:var(--muted); }
+  .cta { margin-top:34px; display:flex; gap:14px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:13px 28px; border-radius:10px; text-decoration:none; font-weight:600; font-size:16px; }
+  .btn.primary { background:var(--accent); color:#fff; }
+  .btn.ghost { border:1px solid #2a3a5c; color:var(--ink); }
+  section { padding:56px 0; }
+  h2 { font-size:30px; margin-bottom:8px; }
+  .sub { color:var(--muted); margin-bottom:32px; font-size:17px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:18px; }
+  .card { background:var(--card); border:1px solid #232f4a; border-radius:14px; padding:22px; }
+  .card h3 { font-size:17px; margin-bottom:6px; }
+  .card p { color:var(--muted); font-size:14.5px; }
+  .shot { border-radius:14px; width:100%; border:1px solid #232f4a; display:block; }
+  figure { margin:0; }
+  figcaption { color:var(--muted); font-size:13.5px; text-align:center; margin-top:10px; }
+  .principles { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:18px; }
+  .principle { border-left:3px solid var(--accent2); padding:6px 0 6px 16px; }
+  .principle b { display:block; margin-bottom:2px; }
+  .principle span { color:var(--muted); font-size:14px; }
+  ol.steps { counter-reset:s; list-style:none; padding:0; }
+  ol.steps li { counter-increment:s; display:flex; gap:16px; margin-bottom:20px; }
+  ol.steps li::before { content:counter(s); flex:0 0 34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; }
+  ol.steps div { padding-top:4px; }
+  ol.steps b { display:block; }
+  ol.steps span { color:var(--muted); font-size:14.5px; }
+  code { background:#0b101c; padding:2px 7px; border-radius:6px; font-size:13.5px; }
+  footer { border-top:1px solid #1e2942; color:var(--muted); text-align:center; padding:34px 0 44px; font-size:14px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <img class="logo" src="img/logo-large.png" alt="TimeWise hourglass logo" />
+    <h1>TimeWise</h1>
+    <p class="tag">Understand your screen time.</p>
+    <div class="badges">
+      <span class="badge">🏠 100% home network — no cloud</span>
+      <span class="badge">🧒 Built for kids under 15</span>
+      <span class="badge">🍎 macOS · 🪟 Windows</span>
+      <span class="badge">🦀 Rust + Tauri 2</span>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/CooperWaNg-py/TimeWise">Get it on GitHub</a>
+      <a class="btn ghost" href="#how">How it works</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>Awareness, not enforcement</h2>
+    <p class="sub">TimeWise helps kids see where their computer time goes — so families can talk about it. No lockouts, no spying, no servers in someone else's cloud.</p>
+    <figure><img class="shot" src="img/dashboard-overview.webp" alt="Parent dashboard overview showing per-child screen time" /><figcaption>The parent dashboard: today's time per child, live connection status, points.</figcaption></figure>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>One app, two roles</h2>
+    <p class="sub">Install the same app everywhere. On first launch, each account picks a role — it all happens inside your home network.</p>
+    <ol class="steps">
+      <li><div><b>Parent's computer → Master</b><span>Runs a small embedded server and the dashboard. Multiple parents can each run one.</span></div></li>
+      <li><div><b>Child's computer → Worker</b><span>Tracks the active window, pauses when idle, buffers offline, syncs every 60 seconds. Finds the parent automatically via mDNS.</span></div></li>
+      <li><div><b>Approve &amp; assign</b><span>New devices show up on the parent's dashboard. Approve, name the child — merge several computers or usernames into one child.</span></div></li>
+      <li><div><b>See, talk, reward</b><span>Daily/weekly goals, points for meeting them, and gentle nudges — never a lockout.</span></div></li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <p class="sub">Everything a family needs to build healthy screen habits — nothing that phones home.</p>
+    <div class="grid">
+      <div class="card"><h3>📊 Parent dashboard</h3><p>Per-child totals (day/week), per-app breakdown with categories, time-of-day chart, live online status.</p></div>
+      <div class="card"><h3>⭐ Goals &amp; points</h3><p>Daily and weekly goals per child. Points are awarded only for completed days and weeks with real usage.</p></div>
+      <div class="card"><h3>💬 Gentle nudges</h3><p>Positive, non-blocking notifications at 90/100/110% of goal, plus stretch-break prompts after 40 minutes.</p></div>
+      <div class="card"><h3>🧒 Child's own screen</h3><p>Kids see their own day, goal progress, and points — self-awareness starts with visibility.</p></div>
+      <div class="card"><h3>🔗 Multi-device merge</h3><p>One child, several computers or usernames? Merge them — time, goals, and points combine automatically.</p></div>
+      <div class="card"><h3>🏠 Privacy by default</h3><p>All data stays on your LAN in a local SQLite database. No accounts, no analytics, no internet required.</p></div>
+      <div class="card"><h3>🪶 Lightweight</h3><p>Rust + Tauri 2. Near-zero idle CPU, system-tray app, starts at login, idle pause after 5 minutes.</p></div>
+      <div class="card"><h3>🏷️ Smart categories</h3><p>Games, Educational, Entertainment, Social Media, Productivity, Browsers — auto-categorized, parent-overridable.</p></div>
+      <div class="card"><h3>👀 Parent self-tracking</h3><p>Optional — because awareness is for everyone in the family.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>See it in action</h2>
+    <p class="sub">Real screenshots from a household setup.</p>
+    <div class="grid">
+      <figure><img class="shot" src="img/dashboard-child.webp" alt="Child detail view with per-app breakdown" /><figcaption>Per-app breakdown and time-of-day.</figcaption></figure>
+      <figure><img class="shot" src="img/dashboard-settings.webp" alt="Settings: goals, device merge, categories" /><figcaption>Goals, device-to-child merge, categories.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Get started</h2>
+    <p class="sub">Ten minutes, start to finish.</p>
+    <ol class="steps">
+      <li><div><b>Download or build</b><span>Grab <code>TimeWise.app</code> from GitHub Releases, or <code>cargo build</code> from source (Rust + Tauri 2).</span></div></li>
+      <li><div><b>Pick roles</b><span>Master on the parent's account, Worker under each child's account.</span></div></li>
+      <li><div><b>Pair over the LAN</b><span>The worker finds the master automatically — approve it on the dashboard.</span></div></li>
+      <li><div><b>Set a goal together</b><span>Start with a conversation, a daily goal, and watch the points roll in.</span></div></li>
+    </ol>
+    <div class="cta" style="justify-content:flex-start">
+      <a class="btn primary" href="https://github.com/CooperWaNg-py/TimeWise">Star on GitHub</a>
+      <a class="btn ghost" href="https://github.com/CooperWaNg-py/TimeWise#readme">Read the README</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>TimeWise — MIT licensed · Built with Rust + Tauri 2 · No cloud, ever.</p>
+    <p><a href="https://github.com/CooperWaNg-py/TimeWise">github.com/CooperWaNg-py/TimeWise</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
