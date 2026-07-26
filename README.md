@@ -1,4 +1,4 @@
-# TimeWise
+# TimeWise                                            <img width="64" height="64" alt="image" src="https://github.com/user-attachments/assets/ba6923c4-265c-410a-8f1e-e8152d3144c9" />
 
 > *Understand your screen time.*
 
