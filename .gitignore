@@ -3,6 +3,7 @@
 
 # AI-DLC workflow documentation
 /aidlc-docs/
+/aws-aidlc-rules/
 
 # macOS
 .DS_Store
