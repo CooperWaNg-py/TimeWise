@@ -4,7 +4,7 @@
 
 TimeWise is a privacy-first screen time tracker for families. It helps kids (under 15) see how much time they spend on their computers — building self-awareness through data visibility and positive reinforcement, **not punishment or enforcement**. All data stays inside your home network. No cloud, no accounts, no subscriptions.
 
-![TimeWise dashboard](docs/img/dashboard-overview.webp)
+![TimeWise dashboard](docs/img/dashboard-overview.png)
 
 ## How it works
 
@@ -43,7 +43,7 @@ Child's Mac/PC                    Parent's Mac
 
 | Child detail | Settings: goals, device merge, categories |
 |---|---|
-| ![Child detail](docs/img/dashboard-child.webp) | ![Settings](docs/img/dashboard-settings.webp) |
+| ![Child detail](docs/img/dashboard-child.png) | ![Settings](docs/img/dashboard-settings.png) |
 
 ## Install
 

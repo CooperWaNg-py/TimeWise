@@ -69,8 +69,14 @@ async function boot() {
   } else {
     apiBase = `http://127.0.0.1:${uiState.port}/api/v1`;
     $("#nav").classList.remove("hidden");
-    show("view-overview");
-    refreshAll();
+    // Optional deep-link: index.html#view=overview|child|settings
+    const hashView = new URLSearchParams(location.hash.slice(1)).get("view");
+    const startView = ["overview", "child", "settings"].includes(hashView) ? hashView : "overview";
+    show("view-" + startView);
+    refreshAll().then(() => {
+      if (startView === "child") renderChildDetail();
+      if (startView === "settings") renderSettings();
+    });
     setInterval(refreshAll, 15000);
   }
 }
