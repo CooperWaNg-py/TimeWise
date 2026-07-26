@@ -18,10 +18,10 @@ One app, two roles — chosen per OS user account on first launch:
 ```
 Child's Mac/PC                    Parent's Mac
 ┌────────────────────┐            ┌─────────────────────────┐
-│ Window tracker (2s)│            │ REST API (LAN :47820)    │
-│ Idle pause (5 min) │   HTTP/    │ SQLite                   │
-│ Local buffer       │── JSON ──▶ │ Dashboard (in-app)       │
-│ Sync + heartbeat   │   LAN      │ Goals / points / merge   │
+│ Window tracker (2s)│            │ REST API (LAN :47820)   │
+│ Idle pause (5 min) │   HTTP/    │ SQLite                  │
+│ Local buffer       │── JSON ──▶ │ Dashboard (in-app)      │
+│ Sync + heartbeat   │   LAN      │ Goals / points / merge  │
 └────────────────────┘            └─────────────────────────┘
         mDNS auto-discovery · zero cloud · works offline
 ```
