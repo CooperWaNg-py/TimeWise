@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TimeWise</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --ink:#1c2333; --muted:#67718a; --accent:#4f7cff; --good:#2ea86b; --warn:#e0a02e; --bad:#d9534f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--card); padding:14px 24px; display:flex; align-items:baseline; gap:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  header h1 { font-size:20px; margin:0; }
+  header .tag { color:var(--muted); font-size:13px; }
+  nav { margin-left:auto; display:flex; gap:8px; }
+  nav button, .btn { border:1px solid #d7dcea; background:#fff; border-radius:8px; padding:7px 14px; cursor:pointer; font-size:14px; }
+  nav button.active, .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  main { padding:24px; max-width:1000px; margin:0 auto; }
+  .card { background:var(--card); border-radius:12px; padding:18px 20px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .hidden { display:none !important; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  .dot.on { background:var(--good); } .dot.off { background:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #eef1f7; }
+  th { color:var(--muted); font-weight:600; }
+  .muted { color:var(--muted); }
+  h2 { font-size:16px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; }
+  input, select { padding:7px 10px; border:1px solid #d7dcea; border-radius:8px; font-size:14px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .pill { background:#eef2ff; color:var(--accent); border-radius:999px; padding:2px 10px; font-size:12px; }
+  .big { font-size:28px; font-weight:700; }
+  .bar-outer { background:#eef1f7; border-radius:6px; height:10px; overflow:hidden; }
+  .bar-inner { background:var(--accent); height:100%; }
+  #view-role .choice { text-align:center; padding:40px 20px; cursor:pointer; }
+  #view-role .choice:hover { border-color:var(--accent); }
+  #view-role .choice .emoji { font-size:40px; }
+  #view-role .grid { grid-template-columns:1fr 1fr; }
+  canvas { max-width:100%; }
+  .error { color:var(--bad); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TimeWise</h1><span class="tag">Understand your screen time.</span>
+  <nav id="nav" class="hidden">
+    <button data-view="overview" class="active">Overview</button>
+    <button data-view="child">Child detail</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+</header>
+<main>
+  <!-- First run: role selection (US-01) -->
+  <section id="view-role" class="hidden">
+    <h2 style="text-align:center;margin:30px 0">Who uses this account?</h2>
+    <div class="grid">
+      <div class="card choice" data-role="master">
+        <div class="emoji">👨‍👩‍👧</div><h2>Parent (Master)</h2>
+        <p class="muted">Runs the household server and shows the dashboard.</p>
+      </div>
+      <div class="card choice" data-role="worker">
+        <div class="emoji">🧒</div><h2>Child (Worker)</h2>
+        <p class="muted">Tracks this account's screen time and reports to a parent.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Worker setup: pairing (US-02) -->
+  <section id="view-worker" class="hidden">
+    <div class="card">
+      <h2>Connect to a parent (master)</h2>
+      <div class="row"><button class="btn" id="btn-discover">Search the network…</button><span id="discover-status" class="muted"></span></div>
+      <div id="discovered"></div>
+      <h3>Or enter the parent's address manually</h3>
+      <div class="row">
+        <input id="manual-url" placeholder="192.168.1.10:47820" size="24" />
+        <button class="btn primary" id="btn-pair-manual">Pair</button>
+      </div>
+      <div id="pair-status" class="muted"></div>
+    </div>
+    <div class="card">
+      <h2>Status</h2>
+      <div id="worker-status" class="muted">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Master dashboard: overview (US-05, US-06) -->
+  <section id="view-overview" class="hidden">
+    <div id="pending-card" class="card hidden">
+      <h2>⏳ Pending approvals</h2>
+      <div id="pending-list"></div>
+    </div>
+    <div class="grid" id="children-grid"></div>
+    <div class="card"><h2>Today by child</h2><canvas id="chart-overview" height="90"></canvas></div>
+  </section>
+
+  <!-- Child detail (US-05) -->
+  <section id="view-child" class="hidden">
+    <div class="card"><div class="row">
+      <select id="child-select"></select>
+      <select id="range-select">
+        <option value="today">Today</option>
+        <option value="week">This week</option>
+      </select>
+      <span id="child-usage" class="pill"></span>
+    </div></div>
+    <div class="card"><h2>Applications</h2><table id="app-table"><thead><tr><th>App</th><th>Category</th><th>Time</th><th>%</th></tr></thead><tbody></tbody></table></div>
+    <div class="card"><h2>Time of day</h2><canvas id="chart-tod" height="70"></canvas></div>
+    <div class="card"><h2>Points</h2><div class="row"><span class="big" id="points-balance">0</span><span class="muted">points earned</span></div><table id="points-table"><thead><tr><th>Date</th><th>Points</th><th>Reason</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <!-- Settings (US-07, US-11) -->
+  <section id="view-settings" class="hidden">
+    <div class="card">
+      <h2>Goals</h2>
+      <div class="row"><select id="goal-child"></select></div>
+      <div class="row">
+        <label>Daily (min) <input id="goal-daily" type="number" min="0" size="6" style="width:90px"></label>
+        <label>Weekly (min) <input id="goal-weekly" type="number" min="0" size="6" style="width:90px"></label>
+        <button class="btn primary" id="btn-save-goal">Save goal</button>
+        <span id="goal-status" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>App categories</h2>
+      <h3>Uncategorized apps (currently "Other")</h3>
+      <table id="uncat-table"><thead><tr><th>App</th><th>Total time</th><th>Set category</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+</main>
+<script src="vendor/chart.umd.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
